@@ -59,6 +59,7 @@ def test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     app.dependency_overrides[get_storage] = override_get_storage
 
     # 4. Monkeypatch module-level SessionLocal and storage references
+    #Replace production database and storage references with test instances to isolate tests from real resources.
     monkeypatch.setattr("app.database.SessionLocal", TestSessionLocal)
     monkeypatch.setattr("app.services.job_service.SessionLocal", TestSessionLocal)
     monkeypatch.setattr("app.services.storage.default_storage", test_storage)
