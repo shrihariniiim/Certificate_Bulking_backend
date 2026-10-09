@@ -216,7 +216,7 @@ def process_job(
                 job.failed_count += 1
                 db.commit()
 
-        # Final Job status evaluation
+        # Final Job status is evaluated 
         if job.success_count == job.total_count:
             job.status = JobStatus.COMPLETED.value
         elif job.success_count == 0:
