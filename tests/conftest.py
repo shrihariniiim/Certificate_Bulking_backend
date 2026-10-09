@@ -71,7 +71,7 @@ def test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "storage_dir": test_storage_dir,
     }
 
-    # Teardown
+    # Teardown approach
     app.dependency_overrides.clear()
     Base.metadata.drop_all(bind=test_engine)
     test_engine.dispose()

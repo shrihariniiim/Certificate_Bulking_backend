@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     app_title: str = "Bulk Certificate Generator API"
     app_version: str = "1.0.0"
 
-    # Pydantic settings configuration
+    # Pydantic settings 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
