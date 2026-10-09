@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from app.models import CertificateStatus, JobStatus
 
@@ -163,4 +164,157 @@ def test_resolve_path_traversal_rejection(test_env):
 
     with pytest.raises(ValueError, match="escapes storage directory"):
         storage.resolve_path("..\\app.db")
+
+    with pytest.raises(ValueError, match="escapes storage directory"):
+        storage.resolve_path("subdir/../../secret.txt")
+
+    with pytest.raises(ValueError, match="escapes storage directory"):
+        storage.resolve_path("../../../../../windows/system32/cmd.exe")
+
+
+def test_null_or_missing_or_non_string_recipient_fields(client):
+    """
+    Verifies that null, missing, or non-string recipient name or email
+    does NOT cause a 422 Unprocessable Entity error at the request level.
+    The bulk request is accepted with HTTP 202, and the invalid recipients
+    are recorded as FAILED items with error details.
+    """
+    payload = {
+        "course_name": "Resilience Engineering",
+        "organization_name": "Aereo Academy",
+        "issue_date": "2026-10-08",
+        "recipients": [
+            {"name": "Valid First", "email": "valid1@example.com"},
+            {"name": None, "email": "nullname@example.com"},
+            {"email": "missingname@example.com"},
+            {"name": "Null Email", "email": None},
+            {"name": "Missing Email"},
+            {"name": 12345, "email": "numericname@example.com"},
+            {"name": "Bad Int Email", "email": 9999},
+            {"name": "Valid Second", "email": "valid2@example.com"},
+        ],
+    }
+
+    res = client.post("/api/v1/jobs", json=payload)
+    assert res.status_code == 202
+    job_id = res.json()["job_id"]
+
+    status_res = client.get(f"/api/v1/jobs/{job_id}")
+    assert status_res.status_code == 200
+    data = status_res.json()
+
+    assert data["total_count"] == 8
+    assert data["success_count"] == 2
+    assert data["failed_count"] == 6
+    assert data["status"] == JobStatus.COMPLETED_WITH_ERRORS.value
+
+    items = data["recipients"]
+    assert items[0]["status"] == CertificateStatus.SUCCESS.value
+    assert items[1]["status"] == CertificateStatus.FAILED.value
+    assert items[2]["status"] == CertificateStatus.FAILED.value
+    assert items[3]["status"] == CertificateStatus.FAILED.value
+    assert items[4]["status"] == CertificateStatus.FAILED.value
+    assert items[5]["status"] == CertificateStatus.FAILED.value
+    assert items[6]["status"] == CertificateStatus.FAILED.value
+    assert items[7]["status"] == CertificateStatus.SUCCESS.value
+
+
+def test_long_recipient_name_truncated_to_255(client, db_session):
+    """
+    Verifies:
+    1. A recipient with a 300-character name fails recipient validation (exceeds max_name_length),
+       the request still succeeds with 202, and the stored recipient_name in DB is truncated to 255 chars.
+    2. A request with a 300-character course_name or organization_name is rejected with HTTP 422.
+    """
+    from app.models import Certificate
+    from sqlalchemy import select
+
+    long_name = "A" * 300
+    payload = {
+        "course_name": "Database Limits",
+        "organization_name": "Aereo Academy",
+        "issue_date": "2026-10-08",
+        "recipients": [
+            {"name": long_name, "email": "long@example.com"},
+            {"name": "Normal User", "email": "normal@example.com"},
+        ],
+    }
+    res = client.post("/api/v1/jobs", json=payload)
+    assert res.status_code == 202
+    job_id = res.json()["job_id"]
+
+    status_res = client.get(f"/api/v1/jobs/{job_id}")
+    assert status_res.status_code == 200
+    data = status_res.json()
+    assert data["failed_count"] == 1
+    assert data["success_count"] == 1
+
+    # Check database stored record directly
+    stmt = select(Certificate).where(Certificate.job_id == uuid.UUID(job_id), Certificate.position == 0)
+    cert = db_session.scalar(stmt)
+    assert cert is not None
+    assert cert.status == CertificateStatus.FAILED.value
+    assert len(cert.recipient_name) == 255
+    assert cert.recipient_name == "A" * 255
+
+    # Check course_name max_length=255 rejection
+    payload_bad_course = {
+        "course_name": "C" * 300,
+        "organization_name": "Aereo Academy",
+        "issue_date": "2026-10-08",
+        "recipients": [{"name": "Asha", "email": "asha@example.com"}],
+    }
+    res_bad_course = client.post("/api/v1/jobs", json=payload_bad_course)
+    assert res_bad_course.status_code == 422
+
+    # Check organization_name max_length=255 rejection
+    payload_bad_org = {
+        "course_name": "Valid Course",
+        "organization_name": "O" * 300,
+        "issue_date": "2026-10-08",
+        "recipients": [{"name": "Asha", "email": "asha@example.com"}],
+    }
+    res_bad_org = client.post("/api/v1/jobs", json=payload_bad_org)
+    assert res_bad_org.status_code == 422
+
+
+def test_max_recipients_lowered_via_settings_clear_cache(client, monkeypatch):
+    """
+    Verifies that lowering MAX_RECIPIENTS via environment/settings and clearing
+    the get_settings cache dynamically alters request validation limits.
+    """
+    from app.config import get_settings
+
+    monkeypatch.setenv("MAX_RECIPIENTS", "3")
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.max_recipients == 3
+
+        payload_exceeding = {
+            "course_name": "Cache Clearance",
+            "organization_name": "Aereo Academy",
+            "issue_date": "2026-10-08",
+            "recipients": [
+                {"name": f"User {i}", "email": f"user{i}@example.com"}
+                for i in range(4)
+            ],
+        }
+        res_exceeding = client.post("/api/v1/jobs", json=payload_exceeding)
+        assert res_exceeding.status_code == 422
+        assert "exceed" in res_exceeding.json()["detail"].lower()
+
+        payload_within = {
+            "course_name": "Cache Clearance",
+            "organization_name": "Aereo Academy",
+            "issue_date": "2026-10-08",
+            "recipients": [
+                {"name": f"User {i}", "email": f"user{i}@example.com"}
+                for i in range(3)
+            ],
+        }
+        res_within = client.post("/api/v1/jobs", json=payload_within)
+        assert res_within.status_code == 202
+    finally:
+        get_settings.cache_clear()
 

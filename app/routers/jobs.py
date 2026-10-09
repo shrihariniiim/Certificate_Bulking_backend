@@ -15,7 +15,7 @@ from app.schemas import (
     JobStatusResponse,
 )
 from app.services.job_service import create_bulk_job, process_job
-from app.services.storage import default_storage
+from app.services.storage import StorageService, get_storage
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["Jobs"])
 
@@ -36,12 +36,13 @@ def create_job(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     session_factory: sessionmaker = Depends(get_session_factory),
+    storage: StorageService = Depends(get_storage),
 ):
     # 1. Atomically create parent Job and recipient Certificate items
     job = create_bulk_job(db, payload)
 
-    # 2. Enqueue background execution passing the injected session factory dependency
-    background_tasks.add_task(process_job, job.id, session_factory=session_factory)
+    # 2. Enqueue background execution passing the injected session factory and storage dependency
+    background_tasks.add_task(process_job, job.id, session_factory=session_factory, storage=storage)
 
     # 3. Return 202 Accepted with hypermedia navigation links
     return JobCreateResponse(
@@ -220,6 +221,7 @@ def list_job_certificates(
 def download_job_certificates_zip(
     job_id: uuid.UUID,
     db: Session = Depends(get_db),
+    storage: StorageService = Depends(get_storage),
 ):
     job = db.get(Job, job_id)
     if not job:
@@ -238,10 +240,14 @@ def download_job_certificates_zip(
             ),
         )
 
-    # Query all successful certificates
-    stmt = select(Certificate).where(
-        Certificate.job_id == job_id,
-        Certificate.status == CertificateStatus.SUCCESS.value,
+    # Query all successful certificates ordered by recipient position
+    stmt = (
+        select(Certificate)
+        .where(
+            Certificate.job_id == job_id,
+            Certificate.status == CertificateStatus.SUCCESS.value,
+        )
+        .order_by(Certificate.position)
     )
     successful_certs = list(db.scalars(stmt).all())
 
@@ -251,13 +257,13 @@ def download_job_certificates_zip(
             detail="No successful certificates available for download in this job",
         )
 
-    # Build ZIP archive in memory
+    # Build ZIP archive in memory ordered deterministically by position
     items_for_zip = [
-        (c.recipient_name, c.file_path, c.id)
+        (c.recipient_name, c.file_path, c.id, c.position)
         for c in successful_certs
         if c.file_path
     ]
-    zip_bytes = default_storage.build_certificates_zip(items_for_zip)
+    zip_bytes = storage.build_certificates_zip(items_for_zip)
 
     return Response(
         content=zip_bytes,

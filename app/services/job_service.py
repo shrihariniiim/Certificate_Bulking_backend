@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Callable, Optional, Set, Union
+from typing import Any, Callable, Optional, Set, Union
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,35 +15,40 @@ logger = logging.getLogger(__name__)
 
 
 def validate_recipient(
-    name: str,
-    email: str,
+    name: Any,
+    email: Any,
     seen_emails: Set[str],
     max_name_length: int,
 ) -> tuple[bool, Optional[str], str]:
     """
     Tier 2 (Recipient-level) validation.
     Checks recipient data individually:
-    - Empty or whitespace-only name
+    - None or non-string name / empty or whitespace-only name
     - Name exceeding maximum length
-    - Invalid email format
+    - None or non-string email / invalid email format
     - Duplicate email within the same bulk request batch (normalized)
 
     Returns:
     (is_valid: bool, error_message: Optional[str], normalized_email: str)
     """
-    cleaned_name = name.strip() if name else ""
-    norm_email = email.strip().lower() if email else ""
+    if name is None or not isinstance(name, str):
+        return False, "Recipient name cannot be empty or non-string", ""
 
+    cleaned_name = name.strip()
     if not cleaned_name:
-        return False, "Recipient name cannot be empty or whitespace only", norm_email
+        return False, "Recipient name cannot be empty or whitespace only", ""
 
     if len(cleaned_name) > max_name_length:
         return (
             False,
             f"Recipient name exceeds maximum allowed length of {max_name_length} characters",
-            norm_email,
+            "",
         )
 
+    if email is None or not isinstance(email, str):
+        return False, f"Invalid email format: '{email}'", ""
+
+    norm_email = email.strip().lower()
     if not norm_email or not EMAIL_REGEX.match(norm_email):
         return False, f"Invalid email format: '{email}'", norm_email
 
@@ -102,11 +107,13 @@ def create_bulk_job(db: Session, request: JobCreateRequest) -> Job:
         else:
             # Mark recipient as FAILED immediately at inception
             job.failed_count += 1
+            raw_name = str(item.name) if item.name is not None else ""
+            raw_email = str(item.email) if item.email is not None else ""
             cert = Certificate(
                 job_id=job.id,
                 position=idx,
-                recipient_name=item.name if item.name is not None else "",
-                recipient_email=item.email if item.email is not None else "",
+                recipient_name=raw_name[:255],
+                recipient_email=raw_email[:255],
                 status=CertificateStatus.FAILED.value,
                 error_message=err_msg,
                 completed_at=utc_now(),
@@ -239,17 +246,28 @@ def process_job(
 def recover_stale_jobs(session_factory: Optional[Callable[[], Session]] = None) -> int:
     """
     Startup recovery function.
-    Finds any jobs that were left in PROCESSING state (e.g. if the server restarted mid-job)
-    and marks them FAILED so clients are not left waiting forever.
+    Finds any jobs that were left in PROCESSING or PENDING state (e.g. if the server restarted mid-job
+    or before a queued background task started execution) and marks them FAILED so clients are not left waiting forever.
+
+    NOTE ON SINGLE-PROCESS ASSUMPTION:
+    This recovery logic explicitly assumes a single-process application deployment model (e.g. single
+    Uvicorn worker with FastAPI in-memory BackgroundTasks). In a multi-process or multi-instance deployment,
+    running this recovery on startup would create race conditions and mistakenly mark active jobs belonging
+    to other live worker instances as FAILED. For horizontally scaled deployments, a distributed job queue
+    (such as Celery, ARQ, or Redis Queue) with heartbeats or distributed locks should be used instead.
+
     Returns the number of stale jobs recovered.
     """
     factory = session_factory or SessionLocal
     db = factory()
     recovered_count = 0
     try:
-        stmt = select(Job).where(Job.status == JobStatus.PROCESSING.value)
+        stmt = select(Job).where(
+            Job.status.in_([JobStatus.PROCESSING.value, JobStatus.PENDING.value])
+        )
         stale_jobs = list(db.scalars(stmt).all())
         for job in stale_jobs:
+            orig_status = job.status
             job.status = JobStatus.FAILED.value
             job.completed_at = utc_now()
 
@@ -263,7 +281,11 @@ def recover_stale_jobs(session_factory: Optional[Callable[[], Session]] = None) 
             )
             for cert in db.scalars(cert_stmt).all():
                 cert.status = CertificateStatus.FAILED.value
-                cert.error_message = "Server restarted while job was in progress"
+                cert.error_message = (
+                    "Server restarted before job processing could complete"
+                    if orig_status == JobStatus.PROCESSING.value
+                    else "Server restarted while job was pending execution"
+                )
                 cert.completed_at = utc_now()
                 job.failed_count += 1
 
@@ -271,7 +293,7 @@ def recover_stale_jobs(session_factory: Optional[Callable[[], Session]] = None) 
 
         if recovered_count > 0:
             db.commit()
-            logger.info(f"Recovered {recovered_count} stale PROCESSING jobs on startup")
+            logger.info(f"Recovered {recovered_count} stale PENDING/PROCESSING jobs on startup")
     except Exception as e:
         logger.error(f"Error during recover_stale_jobs: {e}", exc_info=True)
         db.rollback()

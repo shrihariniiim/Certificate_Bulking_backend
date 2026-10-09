@@ -4,7 +4,7 @@ import re
 import uuid
 import zipfile
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 from app.config import get_settings
 
@@ -97,18 +97,25 @@ class StorageService:
         file_path = self.resolve_path(relative_path)
         return file_path.read_bytes()
 
-    def build_certificates_zip(self, items: List[Tuple[str, str, uuid.UUID | str]]) -> bytes:
+    def build_certificates_zip(self, items: List[Tuple[Any, ...]]) -> bytes:
         """
         Assembles an in-memory ZIP archive containing the provided certificates.
         items: List of tuples (recipient_name, relative_path, certificate_id)
+               or (recipient_name, rel_path, certificate_id, position).
         Files inside the ZIP are named safely as:
         {sanitized_recipient_name}_{short_id}.pdf
-        This guarantees collision-free, human-readable file names inside the archive.
+        Entries are added to the archive ordered deterministically by position.
         """
         zip_buffer = io.BytesIO()
 
+        if items and len(items[0]) >= 4:
+            sorted_items = sorted(items, key=lambda x: x[3])
+        else:
+            sorted_items = items
+
         with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-            for recipient_name, rel_path, cert_id in items:
+            for item in sorted_items:
+                recipient_name, rel_path, cert_id = item[0], item[1], item[2]
                 if not rel_path:
                     continue
 
@@ -130,3 +137,8 @@ class StorageService:
 
 # Default singleton instance
 default_storage = StorageService()
+
+
+def get_storage() -> StorageService:
+    """Dependency provider returning the default StorageService instance."""
+    return default_storage

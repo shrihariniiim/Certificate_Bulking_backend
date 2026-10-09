@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -6,11 +7,12 @@ from app.config import get_settings
 # Retrieve application settings
 settings = get_settings()
 
-# Ensure parent directory exists for SQLite database file
+# Ensure parent directory exists for SQLite database file explicitly
 if settings.database_url.startswith("sqlite:///"):
     sqlite_path = settings.database_url.replace("sqlite:///", "")
     if sqlite_path and not sqlite_path.startswith(":memory:"):
-        settings.resolved_storage_path
+        db_file = Path(sqlite_path).resolve()
+        db_file.parent.mkdir(parents=True, exist_ok=True)
 
 # SQLite requires check_same_thread=False when background threads/tasks access the same connection pool.
 # For PostgreSQL/MySQL, connect_args is empty because standard client connections are thread-safe.

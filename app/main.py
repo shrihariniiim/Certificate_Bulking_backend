@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Request, Response, status
 from fastapi.exceptions import RequestValidationError
@@ -11,6 +12,7 @@ from app.models import Job
 from app.routers import certificates, jobs
 from app.services.job_service import recover_stale_jobs
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -65,6 +67,16 @@ async def custom_validation_exception_handler(request: Request, exc: RequestVali
     )
 
 
+# Catch-all Exception handler returning {"detail": "Internal server error"} and logging traceback
+@app.exception_handler(Exception)
+async def custom_unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled server exception: %s", exc, exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "Internal server error"},
+    )
+
+
 # Register routers
 app.include_router(jobs.router)
 app.include_router(certificates.router)
@@ -89,11 +101,12 @@ def health_check(response: Response, db: Session = Depends(get_db)):
             "version": settings.app_version,
         }
     except Exception as e:
+        logger.error(f"Health check database error: {e}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
                 "status": "unhealthy",
-                "database": f"disconnected: {str(e)}",
+                "database": "disconnected",
                 "version": settings.app_version,
             },
         )

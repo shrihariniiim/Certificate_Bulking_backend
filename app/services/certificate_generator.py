@@ -21,6 +21,7 @@ def register_fonts_once() -> None:
     """
     Registers Unicode TrueType fonts (NotoSans, NotoSansTamil, NotoSansDevanagari).
     Executed once per process to support multilingual recipient names and characters.
+    Raises RuntimeError if any font file is missing.
     """
     global _FONTS_REGISTERED
     if _FONTS_REGISTERED:
@@ -35,10 +36,11 @@ def register_fonts_once() -> None:
 
     for font_name, filename in font_files.items():
         font_path = FONTS_DIR / filename
-        if font_path.is_file():
-            # Only register if not already known by ReportLab
-            if font_name not in pdfmetrics.getRegisteredFontNames():
-                pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
+        if not font_path.is_file():
+            raise RuntimeError(f"Font file missing: {font_path}")
+        # Only register if not already known by ReportLab
+        if font_name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
 
     _FONTS_REGISTERED = True
 
@@ -48,19 +50,18 @@ def select_font_for_text(text: str) -> str:
     Selects the optimal registered font based on Unicode character ranges.
     - Tamil: U+0B80 to U+0BFF -> NotoSansTamil
     - Devanagari (Hindi, Marathi, Sanskrit): U+0900 to U+097F -> NotoSansDevanagari
-    - Latin / Default: -> NotoSans (falls back to Helvetica if font missing)
+    - Latin / Default: -> NotoSans
     """
     register_fonts_once()
-    registered = pdfmetrics.getRegisteredFontNames()
 
     for ch in text:
         code = ord(ch)
-        if 0x0B80 <= code <= 0x0BFF and "NotoSansTamil" in registered:
+        if 0x0B80 <= code <= 0x0BFF:
             return "NotoSansTamil"
-        if 0x0900 <= code <= 0x097F and "NotoSansDevanagari" in registered:
+        if 0x0900 <= code <= 0x097F:
             return "NotoSansDevanagari"
 
-    return "NotoSans" if "NotoSans" in registered else "Helvetica"
+    return "NotoSans"
 
 
 def auto_shrink_font_size(

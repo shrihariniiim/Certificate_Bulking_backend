@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Certificate, CertificateStatus
-from app.services.storage import default_storage
+from app.services.storage import StorageService, get_storage
 
 router = APIRouter(prefix="/api/v1/certificates", tags=["Certificates"])
 
@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/v1/certificates", tags=["Certificates"])
 def download_certificate(
     certificate_id: uuid.UUID,
     db: Session = Depends(get_db),
+    storage: StorageService = Depends(get_storage),
 ):
     cert = db.get(Certificate, certificate_id)
     if not cert:
@@ -49,7 +50,7 @@ def download_certificate(
         )
 
     try:
-        pdf_bytes = default_storage.read_certificate_pdf(cert.file_path)
+        pdf_bytes = storage.read_certificate_pdf(cert.file_path)
     except FileNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

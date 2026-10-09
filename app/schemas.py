@@ -16,13 +16,13 @@ class RecipientInput(BaseModel):
     """
     Individual recipient payload submitted in a bulk job creation request.
     IMPORTANT DESIGN DECISION:
-    Both `name` and `email` are typed as plain `str` with no constraints (no EmailStr, no min_length).
+    Both `name` and `email` are typed as Optional[Any].
     This ensures FastAPI's Pydantic validation tier will NOT reject the entire bulk request (422)
-    if one recipient has a malformed email or empty name.
+    if one recipient has a malformed email, empty name, None, or non-string data.
     Validation is handled manually at the recipient level inside `job_service.py`.
     """
-    name: str = Field(..., description="Recipient's full name")
-    email: str = Field(..., description="Recipient's email address")
+    name: Optional[Any] = Field(default=None, description="Recipient's full name")
+    email: Optional[Any] = Field(default=None, description="Recipient's email address")
     extra: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Optional additional metadata or custom fields"
@@ -40,8 +40,8 @@ class JobCreateRequest(BaseModel):
     - issue_date must be a valid ISO date (e.g. '2026-10-08')
     - recipients list must not be empty and must not exceed MAX_RECIPIENTS
     """
-    course_name: str = Field(..., min_length=1, description="Course or event title")
-    organization_name: str = Field(..., min_length=1, description="Issuing organization")
+    course_name: str = Field(..., min_length=1, max_length=255, description="Course or event title")
+    organization_name: str = Field(..., min_length=1, max_length=255, description="Issuing organization")
     issue_date: date = Field(..., description="Date of issue, e.g. '2026-10-08'")
     recipients: List[RecipientInput] = Field(
         ...,

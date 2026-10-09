@@ -149,8 +149,8 @@ def test_mixed_validity_bulk_50_recipients(client):
 def test_same_name_zip_entries_unique(client):
     """
     Verifies that when two distinct recipients share the exact same name,
-    their entries inside the ZIP archive do not collide and have unique filenames
-    (due to short certificate UUID suffixing).
+    their entries inside the ZIP archive do not collide, have unique filenames
+    (due to short certificate UUID suffixing), and appear in order of position.
     """
     payload = {
         "course_name": "Name Collision Defense",
@@ -165,6 +165,10 @@ def test_same_name_zip_entries_unique(client):
     res = client.post("/api/v1/jobs", json=payload)
     job_id = res.json()["job_id"]
 
+    status_res = client.get(f"/api/v1/jobs/{job_id}")
+    cert_id_0 = str(status_res.json()["recipients"][0]["id"])[:8]
+    cert_id_1 = str(status_res.json()["recipients"][1]["id"])[:8]
+
     zip_res = client.get(f"/api/v1/jobs/{job_id}/download")
     assert zip_res.status_code == 200
 
@@ -173,6 +177,38 @@ def test_same_name_zip_entries_unique(client):
         assert len(names) == 2
         assert names[0] != names[1]
         assert all(n.lower().startswith("john_smith_") and n.endswith(".pdf") for n in names)
+        # Verify ordering matches position
+        assert cert_id_0 in names[0]
+        assert cert_id_1 in names[1]
+
+
+def test_real_storage_never_touched(client):
+    """
+    Verifies that real default storage is never touched during test runs.
+    All file operations are strictly contained within test_env ephemeral storage.
+    """
+    from app.config import Settings
+    real_storage_path = Settings().resolved_storage_path
+    initial_files = set(real_storage_path.iterdir()) if real_storage_path.exists() else set()
+
+    payload = {
+        "course_name": "Storage Isolation Test",
+        "organization_name": "Aereo Academy",
+        "issue_date": "2026-10-08",
+        "recipients": [{"name": "Storage Tester", "email": "tester@example.com"}],
+    }
+    res = client.post("/api/v1/jobs", json=payload)
+    assert res.status_code == 202
+    job_id = res.json()["job_id"]
+
+    status_res = client.get(f"/api/v1/jobs/{job_id}")
+    cert_id = status_res.json()["recipients"][0]["id"]
+    dl_res = client.get(f"/api/v1/certificates/{cert_id}/download")
+    assert dl_res.status_code == 200
+
+    # Ensure real storage directory had zero files created or modified
+    current_files = set(real_storage_path.iterdir()) if real_storage_path.exists() else set()
+    assert current_files == initial_files
 
 
 def test_tamil_name_extracted_from_job_pdf(client):

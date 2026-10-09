@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base, get_db, get_session_factory
 from app.main import app
-from app.services.storage import StorageService
+from app.services.storage import StorageService, get_storage
 
 
 @pytest.fixture
@@ -51,15 +51,17 @@ def test_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def override_get_session_factory():
         return TestSessionLocal
 
+    def override_get_storage():
+        return test_storage
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_session_factory] = override_get_session_factory
+    app.dependency_overrides[get_storage] = override_get_storage
 
     # 4. Monkeypatch module-level SessionLocal and storage references
     monkeypatch.setattr("app.database.SessionLocal", TestSessionLocal)
     monkeypatch.setattr("app.services.job_service.SessionLocal", TestSessionLocal)
     monkeypatch.setattr("app.services.storage.default_storage", test_storage)
-    monkeypatch.setattr("app.routers.jobs.default_storage", test_storage)
-    monkeypatch.setattr("app.routers.certificates.default_storage", test_storage)
     monkeypatch.setattr("app.services.job_service.default_storage", test_storage)
 
     yield {

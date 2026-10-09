@@ -13,7 +13,8 @@ A production-quality, asynchronous REST API for generating bulk PDF certificates
 ### Installation
 ```bash
 # 1. Clone the repository and navigate into the project directory
-cd Bulking
+git clone https://github.com/shrihariniiim/Certificate_Bulking_backend.git
+cd Certificate_Bulking_backend
 
 # 2. Create and activate a virtual environment
 python -m venv .venv
@@ -254,13 +255,25 @@ The codebase is built with database-agnostic SQLAlchemy 2.0 ORM patterns (no SQL
 
 ---
 
-## 6. Development & AI Assistance Disclosure
+## 6. Known Limitations
+
+While engineered for robust single-node throughput and strict fault isolation, the current architecture has several intentional trade-offs:
+
+1. **Jobs Lost / Stuck on Server Restart**: In-flight tasks managed by FastAPI's in-memory `BackgroundTasks` do not persist task queue state across process restarts. If the server is abruptly stopped while a job is in `PENDING` or `PROCESSING` state, the `recover_stale_jobs()` startup hook detects orphaned jobs and marks them and their unresolved certificates as `FAILED` (with an informative restart error reason) to prevent clients from waiting indefinitely. However, jobs are not automatically re-queued without an external retry mechanism.
+2. **Single-Process Deployment Assumption**: The background processing model and startup recovery logic assume a single application worker process (e.g. single Uvicorn worker). In a multi-worker or multi-container environment without distributed coordination, startup recovery in one worker could prematurely mark active jobs from another worker as failed. Scaling horizontally requires an external message broker (Celery, ARQ, or Redis Queue) and distributed object storage (AWS S3, GCP Cloud Storage).
+3. **No Complex-Script Text Shaping**: ReportLab TrueType font embedding (`TTFont`) places glyphs according to standard character mappings without an OpenType HarfBuzz shaping engine. Complex scripts requiring extensive ligature composition, vowel-sign reordering, and conjunct shaping (such as complex Devanagari ligatures or Tamil conjuncts) are rendered glyph-by-glyph rather than contextually shaped.
+4. **Mixed-Script Recipient Names**: Font selection evaluates Unicode codepoint ranges and selects a single best-fitting font per text field (`NotoSans`, `NotoSansTamil`, or `NotoSansDevanagari`). If a single recipient name combines multiple scripts (e.g., `"John அரவிந்த்"` containing both Latin and Tamil characters), the text is rendered using the first detected script's font, which may render glyphs from the other script as missing boxes.
+5. **No Authentication or Authorization**: The API endpoints are open and do not currently enforce authentication (API keys, JWT, OAuth2) or role-based access control. In production environments, this service should be deployed behind an API gateway or reverse proxy handling TLS termination, client authentication, and rate limiting.
+
+---
+
+## 7. Development & AI Assistance Disclosure
 
 This project was built with the assistance of AI engineering tools (Google DeepMind Antigravity) to establish test-driven implementation patterns, Unicode TrueType font configuration, and architectural failure-isolation safeguards.
 
 ---
 
-## 7. Font License
+## 8. Font License
 
 The bundled TrueType fonts in `app/assets/fonts/` (`NotoSans-Regular.ttf`, `NotoSansTamil-Regular.ttf`, `NotoSansDevanagari-Regular.ttf`) are created by Google and licensed under the **SIL Open Font License (OFL), Version 1.1** (https://openfontlicense.org).
 
